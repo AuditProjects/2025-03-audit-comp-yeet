@@ -99,7 +99,7 @@ contract Reward_PunshItChewie is Test {
         RewardSettings settings = new RewardSettings();
         settings.setYeetRewardsSettings(1);
         reward = new Reward(token, settings);
-        reward.setYeetContract(address(this));
+        reward.setYeetContract(address(this)); // 测试合约充当 Yeet 获取执行权限
 
         token.mint(address(reward), 40_000_000 * (10 ** 18));
 

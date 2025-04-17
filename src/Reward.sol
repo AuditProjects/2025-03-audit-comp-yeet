@@ -45,7 +45,7 @@ contract OnlyYeetContract is Ownable2Step {
 /// @title Emission contract based on YEETING volume
 /// @notice This contract is responsible for distributing rewards based on the volume of YEET that each address does under a certain period of time
 contract Reward is OnlyYeetContract {
-    /// @notice The token to be distributed as rewards
+    /// @notice The token to be distributed as rewards - YEET 代币
     IERC20 public token;
     /// @notice The settings for the rewards
     RewardSettings public rewardsSettings;
@@ -77,6 +77,7 @@ contract Reward is OnlyYeetContract {
     /// @dev This field is to keep track of the last epoch that a user has claimed, not what epoch the user claimed in, but up to what epoch the user has claimed rewards for.
     mapping(address => uint256) public lastClaimedForEpoch;
 
+    // Reward 将阶段分为 epoch
     /// @notice The current epoch
     uint256 public currentEpoch;
     /// @notice The timestamp of the end of the current epoch
@@ -104,6 +105,7 @@ contract Reward is OnlyYeetContract {
         return epochRewards[currentEpoch];
     }
 
+    // @q-a 随机数操纵 - timestamp无法操纵
     function getLastMidnight() public view returns (uint256) {
         return block.timestamp - (block.timestamp % 1 days);
     }
@@ -129,9 +131,11 @@ contract Reward is OnlyYeetContract {
     }
 
     /// @notice Claim the rewards for the sender
+    // claim $YEET 代币
     function claim() external {
         uint256 amountEarned = getClaimableAmount(msg.sender);
         require(amountEarned != 0, "Nothing to claim");
+        // @audit-m2-ok token mint 不在合约当中,由 token 管理者,如果忘记mint 足够,用户
         require(token.balanceOf(address(this)) >= amountEarned, "Not enough tokens in contract");
 
         lastClaimedForEpoch[msg.sender] = currentEpoch - 1; // This should be the fix.
@@ -170,12 +174,14 @@ contract Reward is OnlyYeetContract {
 
     /// @notice Calculate the amount of tokens that a user can claim
     /// @dev if no one yeets, the epoch will never end, and the user can never claim (should not really be a problem)
+    // @f-a 计算逻辑 - 计算用户每个 epoch能分到的 $YEET
     function getClaimableAmount(address user) public view returns (uint256) {
         uint256 totalClaimable;
 
         // Fixed-point arithmetic for more precision
         uint256 scalingFactor = 1e18;
-
+        // @audit-m3 DOS，如有用户很多轮没有 claim - 只会影响单个用户 - solution: 记录未unclaimded总数量
+        // epoch永远在加
         for (uint256 epoch = lastClaimedForEpoch[user] + 1; epoch < currentEpoch; epoch++) {
             if (totalYeetVolume[epoch] == 0) continue; // Avoid division by zero
 
@@ -184,7 +190,8 @@ contract Reward is OnlyYeetContract {
 
             uint256 userShare = (userVolume * scalingFactor) / totalVolume;
 
-            uint256 maxClaimable = (epochRewards[epoch] / rewardsSettings.MAX_CAP_PER_WALLET_PER_EPOCH_FACTOR());
+            uint256 maxClaimable = (epochRewards[epoch] / rewardsSettings.MAX_CAP_PER_WALLET_PER_EPOCH_FACTOR()); // MAX=30
+            // 按总池子中比例
             uint256 claimable = (userShare * epochRewards[epoch]) / scalingFactor;
 
             if (claimable > maxClaimable) {

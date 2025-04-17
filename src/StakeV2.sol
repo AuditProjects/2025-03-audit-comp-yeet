@@ -63,6 +63,7 @@ contract Manager is IManager, Ownable {
 contract StakeV2 is Manager, ReentrancyGuard {
     /// @notice The staking token
     IERC20 public immutable stakingToken;
+    // @q-a zapper合约作用？ - 存入资金，与外部vault交互
     IZapper public immutable zapper;
     /// @notice The WETH token, used for native zapping.
     IWETH public immutable wbera;
@@ -90,6 +91,7 @@ contract StakeV2 is Manager, ReentrancyGuard {
     /// @notice The limit of staking times
     uint256 public constant STAKING_LIMIT = 30;
     /// @notice The accumulated rewards, that are later distributed when a manager calls the executeRewardDistribution function
+    // 进入质押的 0.07 amount 原生币
     uint256 public accumulatedRewards;
     /// @notice The total amount of vault shares
     uint256 public totalVaultShares;
@@ -133,11 +135,13 @@ contract StakeV2 is Manager, ReentrancyGuard {
     }
 
     // called by WBERA when withdrawing
+    // @audit-m1-ok 直接发送到该合约的其他 bera 无法提出来
     fallback() external payable {}
 
+    // @q-a msg.sender 是本合约，这个函数的作用？ - 无偿捐款; 注入一些流动性
     function depositWBERA(uint256 amount) external {
-        wbera.withdraw(amount);
-        this.depositReward{
+        wbera.withdraw(amount); // wbera -> 合约
+        this.depositReward{     // 合约   -> bera 
                 value: amount
             }();
     }
@@ -146,10 +150,11 @@ contract StakeV2 is Manager, ReentrancyGuard {
     // @dev The function is used to calculate the rewards that are not distributed yet
     /// @return The accumulated rewards in YEET tokens
     function accumulatedDeptRewardsYeet() public view returns (uint256) {
-        return stakingToken.balanceOf(address(this)) - totalSupply;
+        return stakingToken.balanceOf(address(this)) - totalSupply; // totalSupply
     }
 
     /// @notice The function used to distribute excess rewards to the vault.
+    // @note 由管理员调用
     function executeRewardDistributionYeet(
         IZapper.SingleTokenSwap calldata swap,
         IZapper.KodiakVaultStakingParams calldata stakingParams,
@@ -160,6 +165,7 @@ contract StakeV2 is Manager, ReentrancyGuard {
         require(swap.inputAmount <= accRevToken0, "Insufficient rewards to distribute");
 
         stakingToken.approve(address(zapper), accRevToken0);
+        // @q-a what is token0 and token1 - BERA and YEET
         IERC20 token0 = IKodiakVaultV1(stakingParams.kodiakVault).token0();
         IERC20 token1 = IKodiakVaultV1(stakingParams.kodiakVault).token1();
 
@@ -179,6 +185,7 @@ contract StakeV2 is Manager, ReentrancyGuard {
         emit RewardsDistributedToken0(accRevToken0, rewardIndex);
     }
 
+
     function executeRewardDistribution(
         IZapper.SingleTokenSwap calldata swap0,
         IZapper.SingleTokenSwap calldata swap1,
@@ -193,6 +200,7 @@ contract StakeV2 is Manager, ReentrancyGuard {
         accumulatedRewards = 0;
 
         // Use Zapper to swap accumulated BERA and deposit into vault
+        // @q-a 唯一转出 Stake 的 bera 币 到 zapper 合约， amountToDistribute记录的发送
         (uint256 _islandTokens, uint256 vaultSharesMinted) =
                             zapper.zapInNative{value: amountToDistribute}(swap0, swap1, stakingParams, vaultParams);
 
@@ -232,8 +240,9 @@ contract StakeV2 is Manager, ReentrancyGuard {
     /// @dev updates the rewards of the account
     function stake(uint256 amount) external {
         require(amount > 0, "Amount must be greater than 0");
+        // 先更新当前状态
         _updateRewards(msg.sender);
-
+        // 再转头
         stakingToken.transferFrom(msg.sender, address(this), amount);
 
         balanceOf[msg.sender] += amount;
@@ -298,6 +307,7 @@ contract StakeV2 is Manager, ReentrancyGuard {
     /// @param vesting The vesting to calculate
     /// @return unlockedAmount The amount of tokens that can be unlocked
     /// @return lockedAmount The amount of tokens that are still locked
+    // @f 线性解锁逻辑
     function calculateVesting(Vesting memory vesting) public view returns (uint256, uint256) {
         uint256 unlockedAmount;
         uint256 lockedAmount;

@@ -279,7 +279,7 @@ contract StakeV2_ExecuteRewardsDistrubution is Test, StakeV2_BaseTest {
                 value: 100 ether
             }();
         wbera.transfer(address(stakeV2), 100 ether);
-
+        // stakeV2 有 WBERA 100
         vm.expectEmit(address(stakeV2));
         emit StakeV2.RewardDeposited(address(stakeV2), 100 ether);
         stakeV2.depositWBERA(100 ether);

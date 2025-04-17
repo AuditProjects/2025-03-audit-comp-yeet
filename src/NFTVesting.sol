@@ -28,6 +28,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 /// @title NFTVesting contract
 /// @notice Each NFT will be able to claim a certain amount of tokens based on a linear vesting schedule
+// @note 审计不包含该合约
 contract NFTVesting {
     using SafeERC20 for IERC20;
 

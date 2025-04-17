@@ -38,6 +38,7 @@ import {StakeV2} from "./StakeV2.sol";
 /// @notice User can get a multiplier on their yeet by owning NFTs
 /// @notice The pot is divided into a winner pot and a yeetback pot
 /// @notice The Yeetback pot is paid out to random users that yeeted in the round
+// @note 总入口合约
 contract Yeet is Pausable, Ownable, ReentrancyGuard {
     // Errors
     /// @dev InsufficientYeet is when a user tries to yeet less than the minimum yeet point
@@ -93,6 +94,18 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
     /// @notice treasuryRevenueAmount is the amount of treasury revenue tax that has been collected
     uint256 public treasuryRevenueAmount;
 
+    // // copy from YeetGameSettings
+    // YEET_TIME_SECONDS = 1 hours;
+    // POT_DIVISION = 200;
+    // TAX_PER_YEET = 1000;
+    // TAX_TO_STAKERS = 7000;
+    // TAX_TO_PUBLIC_GOODS = 1000;
+    // TAX_TO_TREASURY = 2000;
+    // YEETBACK_PERCENTAGE = 2000;
+    // COOLDOWN_TIME = 0 hours;
+    // BOOSTRAP_PHASE_DURATION = 0 hours;
+    // MINIMUM_YEET_POINT = 0.001 ether;
+
     // Settings from YeetGameSettings
     /// @notice see `YeetGameSettings` for more information
     uint256 public YEET_TIME_SECONDS; // The time between yeets
@@ -108,7 +121,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
 
     // Contracts
     /// @notice yeetTokenAddress is the address of the YeetToken contract
-    address public yeetTokenAddress;
+    address public yeetTokenAddress; // @audit-m2-ok yeettoken没使用,即没有mint 量
     /// @notice rewardsContract is the Reward contract
     Reward public rewardsContract;
     /// @notice stakingContract is the StakeV2 contract
@@ -184,6 +197,9 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
     //Arrays
     /// @notice nftBoostLookup is an array of the NFT boost lookup table
     /// @dev The array index is the number of NFTs owned, the value is the boost in % with a scale of 10000
+    // 0 NFT  -> 0
+    // 1 NFT  -> 345
+    // 2 NFTs -> 540
     uint256[26] public nftBoostLookup = [
         0,
         345,
@@ -224,6 +240,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         address _entropy,
         address _entropyProvider
     ) Ownable(msg.sender) Pausable() {
+        // @audit-l1-ok Reward/StakeV2/YeetGameSettings zero address checks
         require(_publicGoodsAddress != address(0), "Invalid public goods address");
         require(_teamAddress != address(0), "Invalid team address");
         require(_yeetTokenAddress != address(0), "Invalid yeet token address");
@@ -240,7 +257,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         copySettings();
 
         lastYeetedAt = block.timestamp;
-        endOfYeetTime = block.timestamp + YEET_TIME_SECONDS + BOOSTRAP_PHASE_DURATION;
+        endOfYeetTime = block.timestamp + YEET_TIME_SECONDS + BOOSTRAP_PHASE_DURATION;// 1 + 0
         roundStartTime = block.timestamp;
         emit RoundStarted(
             roundNumber,
@@ -257,6 +274,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
     }
 
     /// @notice this function is used to yeet without any tokenIds (no NFTs)
+    // @q-a 能否重入，只用一笔钱 - 没有可重入的点
     function yeet() external payable {
         _yeet(new uint256[](0));
     }
@@ -275,19 +293,23 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         if (timestamp >= endOfYeetTime) {
             revert YeetTimePassed(timestamp, endOfYeetTime);
         }
-
-        uint256 minimumYeetPoint = _minimumYeetPoint(potToWinner);
+        // 参与Yeet最小数量
+        uint256 minimumYeetPoint = _minimumYeetPoint(potToWinner); // potToWinner获胜者的奖池
         if (msg.value < minimumYeetPoint) {
             revert InsufficientYeet(msg.value, minimumYeetPoint);
         }
-
+        // valueToPot:      0.7  amount
+        // valueToYeetback: 0.2  amount
+        // valueToStakers:  0.07 amount
+        // publicGoods:     0.02 amount
+        // teamRevenue:     0.01 amount
         (uint256 valueToPot, uint256 valueToYeetback, uint256 valueToStakers, uint256 publicGoods, uint256 teamRevenue)
         = getDistribution(msg.value);
 
         publicGoodsAmount += publicGoods;
         treasuryRevenueAmount += teamRevenue;
-
-        yeetTimeInSeconds = YEET_TIME_SECONDS;
+        // @q-a 为什么不用 memory, 看看计算逻辑 - 确实没什么用
+        yeetTimeInSeconds = YEET_TIME_SECONDS; //  1 hour
         uint256 timeLeftOnTimer = endOfYeetTime - timestamp;
 
         potToYeetback += valueToYeetback;
@@ -298,7 +320,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         if (isBoostrapPhase()) {
             endOfYeetTime = roundStartTime + yeetTimeInSeconds + BOOSTRAP_PHASE_DURATION;
         } else {
-            endOfYeetTime = timestamp + yeetTimeInSeconds;
+            endOfYeetTime = timestamp + yeetTimeInSeconds; // 一次 yeet，再加一段 yeetTimeInSeconds
         }
 
         // Useful for the for stats and history
@@ -318,6 +340,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
             timeLeftOnTimer
         );
         if (isBoostrapPhase()) {
+            // @q-a tickets 为 0 的情况, amountOfTickers 肯定 >= 1
             uint256 amountOfTickers = msg.value / minimumYeetPoint;
             for (uint256 i = 0; i < amountOfTickers; i++) {
                 yeetback.addYeetsInRound(roundNumber, msg.sender);
@@ -325,10 +348,10 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         } else {
             yeetback.addYeetsInRound(roundNumber, msg.sender);
         }
-
+        // 奖励提升，提升的只是获得 Reward（$YEEY）的量
         uint256 boostedValue = getBoostedValue(msg.sender, valueToPot, tokenIds);
         rewardsContract.addYeetVolume(msg.sender, boostedValue);
-        stakingContract.depositReward{value: valueToStakers}();
+        stakingContract.depositReward{value: valueToStakers}(); // 进入质押
     }
 
     /// @notice claim is the function the winner uses to claim their winnings
@@ -339,6 +362,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
 
         uint256 valueWon = winnings[msg.sender];
         winnings[msg.sender] = 0;
+        // @q-a 能重入吗 - 不能， 遵循 CEI
         (bool success,) = payable(msg.sender).call{value: valueWon}("");
         require(success, "Transfer failed.");
         emit Claim(msg.sender, block.timestamp, valueWon);
@@ -350,12 +374,13 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
 
     /// @notice restart is the function that restarts the game, any user can call this function after the yeet time has passed
     /// @dev The function will pay out the yeetback pot to random users that yeeted in the round
+    // 停掉上一轮，开始下一轮
     function restart(bytes32 userRandomNumber) external payable whenNotPaused {
         if (userRandomNumber == bytes32(0)) {
             revert InvalidRandomNumber();
         }
 
-        if (!isRoundFinished()) {
+        if (!isRoundFinished()) { // @note 能阻止重入
             revert RoundStillLive(roundNumber);
         }
 
@@ -364,7 +389,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         }
 
         emit RoundWinner(lastYeeted, block.timestamp, potToWinner, roundNumber, nrOfYeets);
-
+        // @q-a 为什么要支付这个费用 - 支付预言机查询的费用
         uint256 fee = yeetback.getEntropyFee();
         if (msg.value < fee) {
             revert NotEnoughValueToPayEntropyFee(msg.value, fee);
@@ -372,6 +397,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         uint256 remaining = msg.value - fee;
 
         if (potToYeetback > 0) {
+            // Yeetback 选取 10 个
             yeetback.addYeetback{value: fee + potToYeetback}(userRandomNumber, roundNumber, potToYeetback);
         }
 
@@ -387,10 +413,12 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         lastYeeted = address(0);
         lastYeetedAt = 0;
         yeetTimeInSeconds = YEET_TIME_SECONDS;
-        endOfYeetTime = block.timestamp + yeetTimeInSeconds + BOOSTRAP_PHASE_DURATION;
+        endOfYeetTime = block.timestamp + yeetTimeInSeconds + BOOSTRAP_PHASE_DURATION; // 每 restart 一次，这里会更新
         roundStartTime = block.timestamp;
 
         if (remaining > 0) {
+            // 向
+            // @q-a 重入？？？ - 遵循了 CEI
             (bool success,) = payable(msg.sender).call{value: remaining}("");
             require(success, "Transfer failed, cant return remaining value to sender");
         }
@@ -427,16 +455,17 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
     /// @return uint256 the value to public goods
     /// @return uint256 the value to the treasury
     function getDistribution(uint256 yeetAmount) public view returns (uint256, uint256, uint256, uint256, uint256) {
-        uint256 scale = gameSettings.SCALE();
+        uint256 scale = gameSettings.SCALE(); // 10000
+        // @q-a 先除后乘貌似没问题: yeetAmount最小要求 1e15,  1e15 / 10000
+        uint256 valueAfterTax = (yeetAmount / scale) * (scale - TAX_PER_YEET); // 税后 -> (amount / 10000) * (10000 - 1000)
 
-        uint256 valueAfterTax = (yeetAmount / scale) * (scale - TAX_PER_YEET);
-        uint256 valueToYeetBack = (yeetAmount / scale) * (YEETBACK_PERCENTAGE);
-        uint256 valueToPot = (yeetAmount / scale) * (scale - YEETBACK_PERCENTAGE - TAX_PER_YEET);
-        uint256 tax = yeetAmount - valueAfterTax;
-
-        uint256 valueToStakers = (tax / scale) * TAX_TO_STAKERS;
-        uint256 publicGoods = (tax / scale) * TAX_TO_PUBLIC_GOODS;
-        uint256 teamRevenue = (tax / scale) * TAX_TO_TREASURY;
+        uint256 valueToYeetBack = (yeetAmount / scale) * (YEETBACK_PERCENTAGE); // YeetBack 20% ->  (amount / 10000) * 2000
+        uint256 valueToPot = (yeetAmount / scale) * (scale - YEETBACK_PERCENTAGE - TAX_PER_YEET); // 奖池 70% -> (amount / 10000) * (10000 - 2000 - 1000)
+        uint256 tax = yeetAmount - valueAfterTax; // 税收 10%
+        // tax 又分为 3 部分
+        uint256 valueToStakers = (tax / scale) * TAX_TO_STAKERS; // 0.7 * 0.1 amount = 0.07 amount
+        uint256 publicGoods = (tax / scale) * TAX_TO_PUBLIC_GOODS; // 0.1 * 0.1 amount = 0.01 amount
+        uint256 teamRevenue = (tax / scale) * TAX_TO_TREASURY;     // 0.02 amount
 
         return (valueToPot, valueToYeetBack, valueToStakers, publicGoods, teamRevenue);
     }
@@ -490,7 +519,7 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
     }
 
     /// @notice payoutPublicGoods is a function that pays out the public goods tax to the public goods address
-    function payoutPublicGoods() external onlyOwner nonReentrant {
+    function payoutPublicGoods() external onlyOwner nonReentrant { // @f-a follow 应该不能重入, nonReentrant 无法交叉重入
         _payout(publicGoodsAmount, payable(publicGoodsAddress), "Yeet: No public goods to pay out");
         emit PublicGoodsPaidOut(publicGoodsAddress, block.timestamp, publicGoodsAmount);
         publicGoodsAmount = 0;
@@ -550,10 +579,15 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
     /// @param tokenIds the tokenIds of the NFTs the user owns
     /// @return uint256 the boosted value
     function getBoostedValue(address sender, uint256 value, uint256[] memory tokenIds) public view returns (uint256) {
-        uint256 nftBoost = getNFTBoost(sender, tokenIds);
+        uint256 nftBoost = getNFTBoost(sender, tokenIds); // nftBoost 最高 1500
+        // @q-a if value 6, no boost - value is valueToPot, 最低 1e15 * 0.7, 因此不可能为 6
+        // -: balance = 1, nftBoost = 0, Boosted = 0
+        // -: balance = 2, nftBoost = 345, Boosted = 
+        // -: balance = 26, nftBoost = 1500, Boosted = 0.15 * value（最高增加 15%）
         return value + (value * nftBoost) / 10000;
     }
 
+    // 
     function isBoostrapPhase() public view returns (bool) {
         return block.timestamp < roundStartTime + BOOSTRAP_PHASE_DURATION;
     }
@@ -565,20 +599,20 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
             return 0;
         }
         INFTContract nftContract = INFTContract(yeetardsNFTsAddress);
-
+        // 拥有 nft 的数量
         uint256 balance = tokenIds.length;
         for (uint256 i = 0; i < balance; i++) {
             // make sure the user is the owner of all the tokensIds
             uint256 tokenId = tokenIds[i];
-            if (nftContract.ownerOf(tokenId) != owner) {
+            if (nftContract.ownerOf(tokenId) != owner) { // @q-a 如何绕开 nft检查 - 绕不开
                 revert UserDoesNotOwnNFTs(owner, tokenId);
             }
         }
-
+        // > 25
         if (balance > nftBoostLookup.length - 1) {
             return nftBoostLookup[nftBoostLookup.length - 1];
         }
-
+        // 根据拥有的 NFT数量查表
         return nftBoostLookup[balance];
     }
 
@@ -594,11 +628,11 @@ contract Yeet is Pausable, Ownable, ReentrancyGuard {
         if (tokenIds.length > nftBoostLookup.length) {
             revert ToManyTokenIds(tokenIds.length);
         }
-
+        // 不传入 token，不需要验证
         if (tokenIds.length == 0) {
             return;
-        }
-
+        }   
+        // 查重
         for (uint256 i = 0; i < tokenIds.length - 1; i++) {
             if (tokenIds[i] >= tokenIds[i + 1]) {
                 revert DuplicateTokenId(tokenIds[i]);

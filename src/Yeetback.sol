@@ -28,9 +28,12 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 /// @title Yeetback contract, a contract that allows users to participate in a yeetback and win some BERA from the current pot
 /// @notice Every round have a yeetback pot, 10 winners are selected from the yeets in the round and they get 10% each of the yeetback pot
 /// @dev The contract uses the Pyth Network Entropy SDK to generate random numbers
-contract Yeetback is Ownable2Step, IEntropyConsumer, ReentrancyGuard {
+
+// 该合约用来分配剩余 20% 的 BEAR, 友情奖
+contract Yeetback is Ownable2Step, IEntropyConsumer, ReentrancyGuard { // 实现IEntropyConsumer，预言机获取随机数
     /// @dev The entropy contract address
-    IEntropy private entropy;
+    // pyth Oracle 
+    IEntropy private entropy; // @q-a 什么是 entropy - pyth Oracle 生成随机数库
     /// @dev The address of the entropy provider
     address private entropyProvider;
 
@@ -44,7 +47,7 @@ contract Yeetback is Ownable2Step, IEntropyConsumer, ReentrancyGuard {
     mapping(uint256 => uint256) public potForRound;
     /// @notice Mapping of the yeets in each round
     /// @dev round => yeets
-    mapping(uint256 => address[]) public yeetsInRound;
+    mapping(uint256 => address[]) public yeetsInRound; // 只使用到其 length，没有 dos
     /// @notice Mapping of the sequence number to the round
     /// @dev sequence number => round
     mapping(uint256 => uint256) public sequenceToRound;
@@ -68,6 +71,7 @@ contract Yeetback is Ownable2Step, IEntropyConsumer, ReentrancyGuard {
     /// @dev The random number is used to select the winners from the yeets in the round
     /// @dev We don't want to get 10 random numbers from the entropy contract because it's expensive, so we use a single random number and seed it with some entropy
     /// @dev We hash the smaller number so that its distribution is more uniform
+    // 随机算法捞10个幸运儿
     function draftWinners(uint256 randomNumber, uint256 round) private {
         uint256 potValue = potForRound[round];
         uint256 nrOfYeets = yeetsInRound[round].length;
@@ -78,6 +82,8 @@ contract Yeetback is Ownable2Step, IEntropyConsumer, ReentrancyGuard {
 
         for (uint256 i; i < nrOfWinners; i++) {
             uint256 randomDataNumber = uint256(keccak256(abi.encodePacked(randomNumber, i)));
+            // nrOfYeets = 100
+            // 落在 [ 0, 99 ] 区间内, 100 个人都有机会
             uint256 winningYeetIndex = randomDataNumber % nrOfYeets; // index of the winning yeet
             address winnerAddress = yeetsInRound[round][winningYeetIndex];
 
@@ -105,13 +111,16 @@ contract Yeetback is Ownable2Step, IEntropyConsumer, ReentrancyGuard {
     /// @param userRandomNumber The user random number
     /// @param round The round number
     /// @param amount The amount to add to the pot
+    // @q-a 什么是yeetback - 分那 20% 奖池的逻辑
+    // 触发
     function addYeetback(bytes32 userRandomNumber, uint256 round, uint256 amount) public payable onlyOwner {
         require(userRandomNumber != bytes32(0), "Invalid number");
         require(round != 0, "Invalid round");
         require(amount != 0, "Invalid amount");
         potForRound[round] = amount;
-
+        // 支付预言机查询的费用
         uint256 fee = getEntropyFee();
+        // 调用预言机，获取随机数， 要发送一些 fee
         uint64 sequenceNumber = entropy.requestWithCallback{value: fee}(entropyProvider, userRandomNumber);
         sequenceToRound[sequenceNumber] = round;
         emit RandomNumberRequested(sequenceNumber);
@@ -155,7 +164,8 @@ contract Yeetback is Ownable2Step, IEntropyConsumer, ReentrancyGuard {
 
     /// @dev This needs to be less then 500K in gas, otherwise the transaction will fail.
     // This method is required by the IEntropyConsumer interface.
-    // It is called by the entropy contract when a random number is generated.
+    // It is called by the entropy contract when a random number is generated.\
+    // @q-a 什么时候调用 - Entropy会回调
     function entropyCallback(
         uint64 sequenceNumber,
         // If your app uses multiple providers, you can use this argument
